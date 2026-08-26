@@ -97,10 +97,39 @@
   col.notes { width: 16%; }
   col.actions { width: 3%; }
   col.todo-check { width: 4%; }
-  col.todo-text { width: 80%; }
-  col.todo-due { width: 13%; }
+  col.todo-text { width: 71%; }
+  col.todo-due { width: 12%; }
+  col.todo-actions { width: 13%; }
   .todo-check-cell { text-align: center; }
   .todo-check-cell input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #1c6e4a; }
+  .todo-actions-cell { white-space: nowrap; }
+  .add-sub-btn {
+    background: transparent;
+    border: none;
+    color: #8a8f98;
+    cursor: pointer;
+    font-size: 15px;
+    font-weight: 600;
+    padding: 4px 7px;
+    border-radius: 5px;
+    line-height: 1;
+  }
+  .add-sub-btn:hover { color: #1c6e4a; background: #e2f2e8; }
+  .subtask-row td { padding: 5px 10px; }
+  .subtask-text { padding-left: 24px; font-size: 12.5px; color: #55585e; }
+  .subtask-count { font-size: 11px; color: #9a9ea5; margin: 2px 0 0 4px; }
+  .todo-sort-select {
+    background: transparent;
+    color: #55585e;
+    border: 1px solid #d9dce1;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    cursor: pointer;
+    font-family: inherit;
+    margin-right: 8px;
+  }
+  .todo-sort-select:hover { color: #1c6e4a; border-color: #1c6e4a; }
   [contenteditable] {
     min-height: 20px;
     outline: none;
@@ -313,6 +342,10 @@
       <button class="tab" data-view="todos">To-Dos</button>
     </div>
     <div>
+      <select id="todoSortSelect" class="todo-sort-select" style="display:none;">
+        <option value="manual">Sort: Manual</option>
+        <option value="due">Sort: Due date</option>
+      </select>
       <button class="add-btn" id="addBtn">+ Add project</button>
       <button class="reset-btn" id="resetBtn" title="Clear all rows">Clear all</button>
     </div>
@@ -336,7 +369,7 @@
   <div class="table-wrap" id="todoWrap" style="display:none;">
     <table>
       <colgroup>
-        <col class="todo-check"><col class="todo-text"><col class="todo-due"><col class="actions">
+        <col class="todo-check"><col class="todo-text"><col class="todo-due"><col class="todo-actions">
       </colgroup>
       <thead>
         <tr>
@@ -385,6 +418,7 @@
 <script>
   const STATUS_OPTIONS = ["Not Started", "Planning", "In Progress", "On Hold", "Cancelled", "Completed"];
   const TERMINAL = ["Cancelled", "Completed"];
+  const ACTIVE_STATUSES = ["Planning", "In Progress"];
   const STATUS_CLASS = {
     "Not Started": "st-not-started",
     "Planning": "st-planning",
@@ -396,6 +430,7 @@
   const STORAGE_KEY = "jsq_project_tracker_v1";
   const VIEW_KEY = "jsq_project_tracker_view_v1";
   const TODO_STORAGE_KEY = "jsq_project_tracker_todos_v1";
+  const TODO_SORT_KEY = "jsq_project_tracker_todo_sort_v1";
 
   function uid() { return "p_" + Math.random().toString(36).slice(2, 10); }
 
@@ -435,6 +470,7 @@
 
   let data = load();
   let todos = loadTodos();
+  let todoSort = localStorage.getItem(TODO_SORT_KEY) || "manual";
   let currentView = localStorage.getItem(VIEW_KEY) || "all";
   let currentPanelId = null;
 
@@ -446,7 +482,7 @@
 
   function getRows() {
     if (currentView === "active") {
-      return data.filter(r => !TERMINAL.includes(r.status));
+      return data.filter(r => ACTIVE_STATUSES.includes(r.status));
     }
     if (currentView === "archived") {
       return data.filter(r => TERMINAL.includes(r.status));
@@ -463,7 +499,7 @@
     document.querySelector('[data-view="all"]').innerHTML =
       `All Projects <span class="count">${data.length}</span>`;
     document.querySelector('[data-view="active"]').innerHTML =
-      `Active Projects <span class="count">${data.filter(r => !TERMINAL.includes(r.status)).length}</span>`;
+      `Active Projects <span class="count">${data.filter(r => ACTIVE_STATUSES.includes(r.status)).length}</span>`;
     document.querySelector('[data-view="archived"]').innerHTML =
       `Cancelled &amp; Completed <span class="count">${data.filter(r => TERMINAL.includes(r.status)).length}</span>`;
     document.querySelector('[data-view="todos"]').innerHTML =
@@ -479,6 +515,8 @@
     const isTodos = currentView === "todos";
     document.getElementById("tableWrap").style.display = isTodos ? "none" : "";
     document.getElementById("todoWrap").style.display = isTodos ? "" : "none";
+    document.getElementById("todoSortSelect").style.display = isTodos ? "" : "none";
+    document.getElementById("todoSortSelect").value = todoSort;
     document.getElementById("addBtn").textContent = isTodos ? "+ Add to-do" : "+ Add project";
     document.getElementById("footerNote").textContent = isTodos
       ? "Checked items sink to the bottom. Edits save automatically to this device."
@@ -536,11 +574,32 @@
       const ad = a.r.done ? 1 : 0;
       const bd = b.r.done ? 1 : 0;
       if (ad !== bd) return ad - bd;
+      if (todoSort === "due") {
+        const aDate = a.r.dueBy || "9999-12-31";
+        const bDate = b.r.dueBy || "9999-12-31";
+        if (aDate !== bDate) return aDate < bDate ? -1 : 1;
+      }
+      return a.i - b.i;
+    }).map(x => x.r);
+  }
+
+  function getSubtaskRows(todo) {
+    const subs = todo.subtasks || [];
+    return subs.slice().map((r, i) => ({ r, i })).sort((a, b) => {
+      const ad = a.r.done ? 1 : 0;
+      const bd = b.r.done ? 1 : 0;
+      if (ad !== bd) return ad - bd;
       return a.i - b.i;
     }).map(x => x.r);
   }
 
   function findTodo(id) { return todos.find(t => t.id === id); }
+
+  function findSubtask(parentId, subId) {
+    const parent = findTodo(parentId);
+    if (!parent) return null;
+    return (parent.subtasks || []).find(s => s.id === subId);
+  }
 
   function renderTodos() {
     const rows = getTodoRows();
@@ -560,13 +619,39 @@
       tr.dataset.id = row.id;
       if (row.done) tr.classList.add("terminal-row");
 
+      const subs = row.subtasks || [];
+      const doneCount = subs.filter(s => s.done).length;
+      const subCountHtml = subs.length
+        ? `<div class="subtask-count">${doneCount}/${subs.length} done</div>`
+        : "";
+
       tr.innerHTML = `
         <td class="todo-check-cell"><input type="checkbox" data-field="done" ${row.done ? "checked" : ""}></td>
-        <td><div class="title-cell" contenteditable="true" data-field="text" data-placeholder="To-do">${esc(row.text)}</div></td>
+        <td>
+          <div class="title-cell" contenteditable="true" data-field="text" data-placeholder="To-do">${esc(row.text)}</div>
+          ${subCountHtml}
+        </td>
         <td><input type="date" data-field="dueBy" value="${row.dueBy || ""}"></td>
-        <td><button class="del-btn" title="Delete to-do">&#10005;</button></td>
+        <td class="todo-actions-cell">
+          <button class="add-sub-btn" title="Add subtask">+</button>
+          <button class="del-btn" title="Delete to-do">&#10005;</button>
+        </td>
       `;
       tbody.appendChild(tr);
+
+      getSubtaskRows(row).forEach(sub => {
+        const subTr = document.createElement("tr");
+        subTr.classList.add("subtask-row");
+        if (sub.done) subTr.classList.add("terminal-row");
+        subTr.dataset.parentId = row.id;
+        subTr.dataset.id = sub.id;
+        subTr.innerHTML = `
+          <td class="todo-check-cell"><input type="checkbox" data-field="done" ${sub.done ? "checked" : ""}></td>
+          <td colspan="2"><div class="subtask-text" contenteditable="true" data-field="text" data-placeholder="Subtask">${esc(sub.text)}</div></td>
+          <td><button class="del-btn" title="Delete subtask">&#10005;</button></td>
+        `;
+        tbody.appendChild(subTr);
+      });
     });
   }
 
@@ -622,6 +707,13 @@
     const field = e.target.dataset.field;
     if (!field || !e.target.isContentEditable) return;
     const tr = e.target.closest("tr");
+    if (tr.classList.contains("subtask-row")) {
+      const sub = findSubtask(tr.dataset.parentId, tr.dataset.id);
+      if (!sub) return;
+      sub[field] = e.target.innerText;
+      saveTodos();
+      return;
+    }
     const row = findTodo(tr.dataset.id);
     if (!row) return;
     row[field] = e.target.innerText;
@@ -631,6 +723,16 @@
   document.getElementById("todoTbody").addEventListener("change", (e) => {
     const tr = e.target.closest("tr");
     if (!tr) return;
+    if (tr.classList.contains("subtask-row")) {
+      if (e.target.dataset.field === "done") {
+        const sub = findSubtask(tr.dataset.parentId, tr.dataset.id);
+        if (!sub) return;
+        sub.done = e.target.checked;
+        saveTodos();
+        renderTodos();
+      }
+      return;
+    }
     const row = findTodo(tr.dataset.id);
     if (!row) return;
     if (e.target.dataset.field === "done") {
@@ -641,12 +743,39 @@
     } else if (e.target.dataset.field === "dueBy") {
       row.dueBy = e.target.value;
       saveTodos();
+      if (todoSort === "due") renderTodos();
     }
   });
 
   document.getElementById("todoTbody").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+
+    if (e.target.classList.contains("add-sub-btn")) {
+      const row = findTodo(tr.dataset.id);
+      if (!row) return;
+      if (!row.subtasks) row.subtasks = [];
+      const newSub = { id: uid(), text: "", done: false };
+      row.subtasks.push(newSub);
+      saveTodos();
+      renderTodos();
+      const newRow = document.querySelector(`tr.subtask-row[data-id="${newSub.id}"]`);
+      if (newRow) {
+        const textCell = newRow.querySelector('[data-field="text"]');
+        if (textCell) textCell.focus();
+      }
+      return;
+    }
+
     if (e.target.classList.contains("del-btn")) {
-      const tr = e.target.closest("tr");
+      if (tr.classList.contains("subtask-row")) {
+        const parent = findTodo(tr.dataset.parentId);
+        if (!parent) return;
+        parent.subtasks = (parent.subtasks || []).filter(s => s.id !== tr.dataset.id);
+        saveTodos();
+        renderTodos();
+        return;
+      }
       const row = findTodo(tr.dataset.id);
       if (!row) return;
       if (confirm(`Delete "${row.text || "this to-do"}"?`)) {
@@ -659,9 +788,15 @@
     }
   });
 
+  document.getElementById("todoSortSelect").addEventListener("change", (e) => {
+    todoSort = e.target.value;
+    localStorage.setItem(TODO_SORT_KEY, todoSort);
+    renderTodos();
+  });
+
   document.getElementById("addBtn").addEventListener("click", () => {
     if (currentView === "todos") {
-      todos.push({ id: uid(), text: "", dueBy: "", done: false });
+      todos.push({ id: uid(), text: "", dueBy: "", done: false, subtasks: [] });
       saveTodos();
       render();
       const lastRow = document.getElementById("todoTbody").lastElementChild;
