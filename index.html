@@ -96,6 +96,11 @@
   col.resources { width: 12%; }
   col.notes { width: 16%; }
   col.actions { width: 3%; }
+  col.todo-check { width: 4%; }
+  col.todo-text { width: 80%; }
+  col.todo-due { width: 13%; }
+  .todo-check-cell { text-align: center; }
+  .todo-check-cell input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #1c6e4a; }
   [contenteditable] {
     min-height: 20px;
     outline: none;
@@ -305,13 +310,14 @@
       <button class="tab" data-view="all">All Projects</button>
       <button class="tab" data-view="active">Active Projects</button>
       <button class="tab" data-view="archived">Cancelled &amp; Completed</button>
+      <button class="tab" data-view="todos">To-Dos</button>
     </div>
     <div>
       <button class="add-btn" id="addBtn">+ Add project</button>
       <button class="reset-btn" id="resetBtn" title="Clear all rows">Clear all</button>
     </div>
   </div>
-  <div class="table-wrap">
+  <div class="table-wrap" id="tableWrap">
     <table>
       <colgroup>
         <col class="title"><col class="details"><col class="due"><col class="status">
@@ -327,7 +333,21 @@
     </table>
     <div class="empty-state" id="emptyState" style="display:none;"></div>
   </div>
-  <div class="footer-note">Edits save automatically to this device. Completed and cancelled projects always sink to the bottom in the "All Projects" view. Click into Details or Running notes to open the full record.</div>
+  <div class="table-wrap" id="todoWrap" style="display:none;">
+    <table>
+      <colgroup>
+        <col class="todo-check"><col class="todo-text"><col class="todo-due"><col class="actions">
+      </colgroup>
+      <thead>
+        <tr>
+          <th></th><th>To-do</th><th>Due by</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="todoTbody"></tbody>
+    </table>
+    <div class="empty-state" id="todoEmptyState" style="display:none;"></div>
+  </div>
+  <div class="footer-note" id="footerNote">Edits save automatically to this device. Completed and cancelled projects always sink to the bottom in the "All Projects" view. Click into Details or Running notes to open the full record.</div>
 </div>
 
 <div class="overlay" id="overlay"></div>
@@ -375,6 +395,7 @@
   };
   const STORAGE_KEY = "jsq_project_tracker_v1";
   const VIEW_KEY = "jsq_project_tracker_view_v1";
+  const TODO_STORAGE_KEY = "jsq_project_tracker_todos_v1";
 
   function uid() { return "p_" + Math.random().toString(36).slice(2, 10); }
 
@@ -400,7 +421,20 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }
 
+  function loadTodos() {
+    try {
+      const raw = localStorage.getItem(TODO_STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (e) { console.error(e); }
+    return [];
+  }
+
+  function saveTodos() {
+    localStorage.setItem(TODO_STORAGE_KEY, JSON.stringify(todos));
+  }
+
   let data = load();
+  let todos = loadTodos();
   let currentView = localStorage.getItem(VIEW_KEY) || "all";
   let currentPanelId = null;
 
@@ -432,6 +466,8 @@
       `Active Projects <span class="count">${data.filter(r => !TERMINAL.includes(r.status)).length}</span>`;
     document.querySelector('[data-view="archived"]').innerHTML =
       `Cancelled &amp; Completed <span class="count">${data.filter(r => TERMINAL.includes(r.status)).length}</span>`;
+    document.querySelector('[data-view="todos"]').innerHTML =
+      `To-Dos <span class="count">${todos.filter(t => !t.done).length}</span>`;
   }
 
   function render() {
@@ -440,6 +476,22 @@
     });
     updateTabCounts();
 
+    const isTodos = currentView === "todos";
+    document.getElementById("tableWrap").style.display = isTodos ? "none" : "";
+    document.getElementById("todoWrap").style.display = isTodos ? "" : "none";
+    document.getElementById("addBtn").textContent = isTodos ? "+ Add to-do" : "+ Add project";
+    document.getElementById("footerNote").textContent = isTodos
+      ? "Checked items sink to the bottom. Edits save automatically to this device."
+      : "Edits save automatically to this device. Completed and cancelled projects always sink to the bottom in the \"All Projects\" view. Click into Details or Running notes to open the full record.";
+
+    if (isTodos) {
+      renderTodos();
+    } else {
+      renderProjects();
+    }
+  }
+
+  function renderProjects() {
     const rows = getRows();
     const tbody = document.getElementById("tbody");
     const emptyState = document.getElementById("emptyState");
@@ -474,6 +526,45 @@
         <td><div contenteditable="true" data-field="resources" data-placeholder="Links, docs, owners">${esc(row.resources)}</div></td>
         <td><div class="clamp-cell" data-field="notes" data-placeholder="Latest update. Click to expand." title="Click to expand">${esc(row.notes)}</div></td>
         <td><button class="del-btn" title="Delete project">&#10005;</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function getTodoRows() {
+    return todos.slice().map((r, i) => ({ r, i })).sort((a, b) => {
+      const ad = a.r.done ? 1 : 0;
+      const bd = b.r.done ? 1 : 0;
+      if (ad !== bd) return ad - bd;
+      return a.i - b.i;
+    }).map(x => x.r);
+  }
+
+  function findTodo(id) { return todos.find(t => t.id === id); }
+
+  function renderTodos() {
+    const rows = getTodoRows();
+    const tbody = document.getElementById("todoTbody");
+    const emptyState = document.getElementById("todoEmptyState");
+    tbody.innerHTML = "";
+
+    if (rows.length === 0) {
+      emptyState.style.display = "block";
+      emptyState.textContent = "No to-dos yet. Click \"+ Add to-do\" to start.";
+      return;
+    }
+    emptyState.style.display = "none";
+
+    rows.forEach(row => {
+      const tr = document.createElement("tr");
+      tr.dataset.id = row.id;
+      if (row.done) tr.classList.add("terminal-row");
+
+      tr.innerHTML = `
+        <td class="todo-check-cell"><input type="checkbox" data-field="done" ${row.done ? "checked" : ""}></td>
+        <td><div class="title-cell" contenteditable="true" data-field="text" data-placeholder="To-do">${esc(row.text)}</div></td>
+        <td><input type="date" data-field="dueBy" value="${row.dueBy || ""}"></td>
+        <td><button class="del-btn" title="Delete to-do">&#10005;</button></td>
       `;
       tbody.appendChild(tr);
     });
@@ -527,7 +618,59 @@
     }
   });
 
+  document.getElementById("todoTbody").addEventListener("input", (e) => {
+    const field = e.target.dataset.field;
+    if (!field || !e.target.isContentEditable) return;
+    const tr = e.target.closest("tr");
+    const row = findTodo(tr.dataset.id);
+    if (!row) return;
+    row[field] = e.target.innerText;
+    saveTodos();
+  });
+
+  document.getElementById("todoTbody").addEventListener("change", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+    const row = findTodo(tr.dataset.id);
+    if (!row) return;
+    if (e.target.dataset.field === "done") {
+      row.done = e.target.checked;
+      saveTodos();
+      renderTodos();
+      updateTabCounts();
+    } else if (e.target.dataset.field === "dueBy") {
+      row.dueBy = e.target.value;
+      saveTodos();
+    }
+  });
+
+  document.getElementById("todoTbody").addEventListener("click", (e) => {
+    if (e.target.classList.contains("del-btn")) {
+      const tr = e.target.closest("tr");
+      const row = findTodo(tr.dataset.id);
+      if (!row) return;
+      if (confirm(`Delete "${row.text || "this to-do"}"?`)) {
+        todos = todos.filter(t => t.id !== row.id);
+        saveTodos();
+        renderTodos();
+        updateTabCounts();
+      }
+      return;
+    }
+  });
+
   document.getElementById("addBtn").addEventListener("click", () => {
+    if (currentView === "todos") {
+      todos.push({ id: uid(), text: "", dueBy: "", done: false });
+      saveTodos();
+      render();
+      const lastRow = document.getElementById("todoTbody").lastElementChild;
+      if (lastRow) {
+        const textCell = lastRow.querySelector('[data-field="text"]');
+        if (textCell) textCell.focus();
+      }
+      return;
+    }
     data.push({ id: uid(), title: "", details: "", dueBy: "", status: "Not Started", dependencies: "", resources: "", notes: "" });
     save();
     if (currentView === "archived") { currentView = "all"; localStorage.setItem(VIEW_KEY, currentView); }
@@ -540,6 +683,14 @@
   });
 
   document.getElementById("resetBtn").addEventListener("click", () => {
+    if (currentView === "todos") {
+      if (confirm("Clear all to-dos from this tracker? This can't be undone.")) {
+        todos = [];
+        saveTodos();
+        render();
+      }
+      return;
+    }
     if (confirm("Clear all projects from this tracker? This can't be undone.")) {
       data = [];
       save();
